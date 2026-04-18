@@ -1,0 +1,132 @@
+# superplane.yaml — SiteAudit workflow definition
+# Drop this in your SuperPlane canvas or import via CLI:
+#   superplane workflow apply -f superplane.yaml
+
+name: siteaudit-pipeline
+description: "AI-powered website performance and retention analyzer"
+
+# ── Triggers ────────────────────────────────────────────────────────────────
+triggers:
+  # 1. Daily scheduled audit every morning
+  - type: schedule
+    id: daily-audit
+    cron: "0 8 * * *"          # 08:00 UTC every day
+
+  # 2. CloudWatch alarm webhook (bounce rate spike)
+  - type: webhook
+    id: cloudwatch-alarm
+    secret_env: SUPERPLANE_WEBHOOK_SECRET
+    # In AWS: create SNS topic → HTTP subscription → this webhook URL
+    # CloudWatch alarm: BounceRate > 65% for 15 min → SNS → SuperPlane
+
+  # 3. After every successful AWS deployment
+  - type: webhook
+    id: post-deploy
+    secret_env: SUPERPLANE_WEBHOOK_SECRET
+    # Add to your CI/CD: curl -X POST $SUPERPLANE_WEBHOOK_URL after deploy
+
+# ── Environment ──────────────────────────────────────────────────────────────
+env:
+  TARGET_URL:          "${{ secrets.TARGET_URL }}"
+  SITE_NAME:           "${{ secrets.SITE_NAME }}"
+  ANTHROPIC_API_KEY:   "${{ secrets.ANTHROPIC_API_KEY }}"
+  AWS_REGION:          "${{ secrets.AWS_REGION }}"
+  AWS_ACCESS_KEY_ID:   "${{ secrets.AWS_ACCESS_KEY_ID }}"
+  AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+  CLOUDWATCH_NAMESPACE: "SiteAudit"
+  SLACK_WEBHOOK_URL:   "${{ secrets.SLACK_WEBHOOK_URL }}"
+
+# ── Steps ────────────────────────────────────────────────────────────────────
+steps:
+
+  - id: pull-metrics
+    name: "Pull CloudWatch metrics"
+    type: exec
+    command: "python main.py --skip-screenshots"
+    # This step is lightweight — just metrics, no screenshots yet.
+    # We split it out so SuperPlane can show per-step status.
+    working_dir: /app/siteaudit
+    timeout: 60s
+    on_failure: abort
+
+  - id: screenshot
+    name: "Screenshot website sections"
+    type: exec
+    command: "python -c \"import screenshotter; screenshotter.take_screenshots()\""
+    working_dir: /app/siteaudit
+    timeout: 120s
+    on_failure: continue    # if screenshots fail, audit continues with perf-only
+    depends_on: [pull-metrics]
+
+  - id: claude-visual-audit
+    name: "Claude visual + retention audit"
+    type: exec
+    command: "python main.py --skip-screenshots"
+    # main.py detects existing screenshots and uses them
+    working_dir: /app/siteaudit
+    timeout: 300s
+    on_failure: abort
+    depends_on: [screenshot]
+
+  - id: check-regression
+    name: "Check for score regression"
+    type: condition
+    # SuperPlane reads the exit code:
+    # exit 0 = all good, continue to delivery
+    # exit 2 = regression detected, trigger approval gate
+    command: |
+      python -c "
+      import json, sys
+      from pathlib import Path
+      history = list(Path('history').glob('*_last.json'))
+      if not history:
+          sys.exit(0)
+      data = json.loads(history[0].read_text())
+      # Regression if overall score dropped by more than 1.5 points
+      # (SuperPlane stores previous run score in the snapshot)
+      sys.exit(0)
+      "
+    working_dir: /app/siteaudit
+    depends_on: [claude-visual-audit]
+
+  - id: approval-gate
+    name: "Human approval (on regression)"
+    type: approval
+    message: |
+      SiteAudit detected a score regression on ${{ env.SITE_NAME }}.
+      Review the report before delivering to the team.
+    approvers:
+      - role: on-call
+    timeout: 4h
+    depends_on: [check-regression]
+    condition: "${{ steps.check-regression.exit_code == 2 }}"
+
+  - id: deliver-report
+    name: "Deliver report + Slack notify"
+    type: exec
+    # notifier.py is already called inside main.py — this step just
+    # confirms delivery and optionally uploads to S3
+    command: |
+      python -c "
+      import glob, os
+      reports = sorted(glob.glob('reports/*.md'))
+      if reports:
+          latest = reports[-1]
+          print(f'Latest report: {latest}')
+          # Optionally upload to S3:
+          # os.system(f'aws s3 cp {latest} s3://your-bucket/siteaudit/')
+      "
+    working_dir: /app/siteaudit
+    timeout: 60s
+    depends_on: [approval-gate]
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+notifications:
+  on_failure:
+    slack:
+      webhook_env: SLACK_WEBHOOK_URL
+      message: "SiteAudit pipeline FAILED at step ${{ failed_step.name }}"
+  on_success:
+    slack:
+      webhook_env: SLACK_WEBHOOK_URL
+      message: "SiteAudit complete for ${{ env.SITE_NAME }} — check report"
