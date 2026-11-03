@@ -1,5 +1,7 @@
 # SiteAudit
 
+[![CI](https://github.com/0jz/SiteAudit/actions/workflows/ci.yml/badge.svg)](https://github.com/0jz/SiteAudit/actions/workflows/ci.yml)
+
 A hackathon pipeline that screenshots your website, combines it with speed and behaviour metrics, and has Claude rate each section, explain why visitors drop off, and suggest concrete fixes to improve speed and retention.
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
