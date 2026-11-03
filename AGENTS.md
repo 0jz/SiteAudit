@@ -26,7 +26,7 @@ Python CLI pipeline: Playwright screenshots + CloudWatch (or mock) metrics → C
 
 ## Do not commit / touch
 - Generated output: `screenshots/`, `reports/`, `history/`. There's no `.gitignore` yet, so add one before committing.
-- API keys. **`maine.py` contains a hard-coded Daytona API key**: rotate it and read `DAYTONA_API_KEY` from env instead.
+- API keys. `maine.py` now reads `DAYTONA_API_KEY` from the environment. The previously committed key is in git history: rotate it.
 - `.idea/` is IDE config that was committed by accident.
 
 ## Gotchas
