@@ -1,7 +1,8 @@
+import os
 from daytona import Daytona, DaytonaConfig
 
 # Initialize Daytona
-config = DaytonaConfig(api_key="dtn_94db53a48f46ec071b7bd5f2d288088285de2605b07c86728f284fb9839da3bf")
+config = DaytonaConfig(api_key=os.environ["DAYTONA_API_KEY"])
 daytona = Daytona(config)
 sandbox = daytona.create()
 
